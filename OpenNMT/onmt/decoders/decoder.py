@@ -7,6 +7,7 @@ import torch.nn as nn
 import onmt.models.stacked_rnn
 from onmt.utils.misc import aeq
 from onmt.utils.rnn_factory import rnn_factory
+import random
 
 
 class RNNDecoderBase(nn.Module):
@@ -132,7 +133,7 @@ class RNNDecoderBase(nn.Module):
         # END
 
         # Run the forward pass of the RNN.
-        decoder_final, decoder_outputs, attns = self._run_forward_pass(
+        decoder_final, decoder_outputs, attns, non_tfoutput = self._run_forward_pass(
             tgt, memory_bank, state, memory_lengths=memory_lengths)
 
         # Update the state with the result.
@@ -140,6 +141,7 @@ class RNNDecoderBase(nn.Module):
         coverage = None
         if "coverage" in attns:
             coverage = attns["coverage"][-1].unsqueeze(0)
+
         state.update_state(decoder_final, final_output.unsqueeze(0), coverage)
 
         # Concatenates sequence of tensors along a new dimension.
@@ -154,7 +156,15 @@ class RNNDecoderBase(nn.Module):
                 if type(attns[k]) == list:
                     attns[k] = torch.stack(attns[k])
 
-        return decoder_outputs, state, attns
+        if type(non_tfoutput) == list:
+            non_tfoutput = torch.stack(non_tfoutput)
+            '''
+            for k in attns:
+                if type(attns[k]) == list:
+                    attns[k] = torch.stack(attns[k])
+            '''
+
+        return decoder_outputs, state, attns, non_tfoutput
 
     def init_decoder_state(self, src, memory_bank, encoder_final):
         """ Init decoder state with last state of the encoder """
@@ -298,17 +308,24 @@ class InputFeedRNNDecoder(RNNDecoderBase):
         """
         # Additional args check.
 
-        tf_ratio = 0.5
-
+        #tf_ratio = 0.5
+        #tf = True if random.random() < tf_ratio else False
+        #print (tgt.size())
 
         input_feed = state.input_feed.squeeze(0)
         input_feed_batch, _ = input_feed.size()
+
+        ninput_feed = state.input_feed.squeeze(0)
+        ninput_feed_batch, _ = input_feed.size()
+                
         _, tgt_batch, _ = tgt.size()
         aeq(tgt_batch, input_feed_batch)
         # END Additional args check.
 
         # Initialize local and return variables.
         decoder_outputs = []
+        ndecoder_outputs = []
+
         attns = {"std": []}
         if self._copy:
             attns["copy"] = []
@@ -316,9 +333,14 @@ class InputFeedRNNDecoder(RNNDecoderBase):
             attns["coverage"] = []
         
         emb = self.embeddings(tgt)
+        nemb = self.embeddings(tgt)
+        nemb_t = nemb[0]
+
         assert emb.dim() == 3  # len x batch x embedding_dim
 
         hidden = state.hidden
+        nhidden = state.hidden
+
         coverage = state.coverage.squeeze(0) \
             if state.coverage is not None else None
 
@@ -326,31 +348,52 @@ class InputFeedRNNDecoder(RNNDecoderBase):
         # input at every time step.
         for _, emb_t in enumerate(emb.split(1)):
             emb_t = emb_t.squeeze(0)
+            
             if _ > 0:
                 last = last.unsqueeze(1).unsqueeze(0)
-                emb_t = self.embeddings(last)
-                emb_t = emb_t.squeeze(0)
+                nemb_t = self.embeddings(last)
+                nemb_t = nemb_t.squeeze(0)
                 #emb_t.squeeze()
+            
+
             decoder_input = torch.cat([emb_t, input_feed], 1)
+            ndecoder_input = torch.cat([nemb_t, ninput_feed], 1)
             
             rnn_output, hidden = self.rnn(decoder_input, hidden)
+            nrnn_output, nhidden = self.rnn(ndecoder_input, nhidden)
+
+
             decoder_output, p_attn = self.attn(
                 rnn_output,
                 memory_bank.transpose(0, 1),
                 memory_lengths=memory_lengths)
+
+            ndecoder_output, np_attn = self.attn(
+                nrnn_output,
+                memory_bank.transpose(0, 1),
+                memory_lengths=memory_lengths)
+
             if self.context_gate is not None:
                 # TODO: context gate should be employed
                 # instead of second RNN transform.
                 decoder_output = self.context_gate(
                     decoder_input, rnn_output, decoder_output
                 )
+
             decoder_output = self.dropout(decoder_output)
+            ndecoder_output = self.dropout(ndecoder_output)
+
             input_feed = decoder_output
+            ninput_feed = ndecoder_output
 
             decoder_outputs += [decoder_output]
+            #ndecoder_outputs += [decoder_output]
+
             attns["std"] += [p_attn]
 
-            lastv, last = self.generator(decoder_output).max(dim=-1)
+            gens = self.generator(ndecoder_output)
+            lastv, last = gens.max(dim=-1)
+            ndecoder_outputs += [gens]
             
 
 
@@ -368,7 +411,7 @@ class InputFeedRNNDecoder(RNNDecoderBase):
             elif self._copy:
                 attns["copy"] = attns["std"]
         # Return result.
-        return hidden, decoder_outputs, attns
+        return hidden, decoder_outputs, attns, ndecoder_outputs
 
     def _build_rnn(self, rnn_type, input_size,
                    hidden_size, num_layers, dropout):

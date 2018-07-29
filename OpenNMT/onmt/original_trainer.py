@@ -231,11 +231,11 @@ class Trainer(object):
             tgt = inputters.make_features(batch, 'tgt')
 
             # F-prop through the model.
-            outputs, attns, _, noutputs = self.model(src, tgt, src_lengths)
+            outputs, attns, _ = self.model(src, tgt, src_lengths)
 
             # Compute loss.
             batch_stats = self.valid_loss.monolithic_compute_loss(
-                batch, outputs, attns, noutputs)
+                batch, outputs, attns)
 
             # Update statistics.
             stats.update(batch_stats)
@@ -316,13 +316,13 @@ class Trainer(object):
                 # 2. F-prop all but generator.
                 if self.grad_accum_count == 1:
                     self.model.zero_grad()
-
-                outputs, attns, dec_state, noutputs = \
+                outputs, attns, dec_state = \
                     self.model(src, tgt, src_lengths, dec_state)
+
                 # 3. Compute loss in shards for memory efficiency.
                 batch_stats = self.train_loss.sharded_compute_loss(
                     batch, outputs, attns, j,
-                    trunc_size, self.shard_size, normalization, noutputs)
+                    trunc_size, self.shard_size, normalization)
 
                 # 4. Update the parameters and statistics.
                 if self.grad_accum_count == 1:

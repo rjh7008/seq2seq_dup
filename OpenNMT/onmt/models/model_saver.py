@@ -68,6 +68,6 @@ class ModelSaver(ModelSaverBase):
             'optim': self.optim,
         }
         torch.save(checkpoint,
-                   '%s_acc_%.2f_ppl_%.2f_e%d.pt'
-                   % (self.base_path, valid_stats.accuracy(),
-                      valid_stats.ppl(), epoch))
+                   '%s_e%d_acc_%.2f_ppl_%.2f.pt'
+                   % (self.base_path, epoch, valid_stats.accuracy(),
+                      valid_stats.ppl()))

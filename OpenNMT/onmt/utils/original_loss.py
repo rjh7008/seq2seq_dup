@@ -62,7 +62,7 @@ class LossComputeBase(nn.Module):
         self.tgt_vocab = tgt_vocab
         self.padding_idx = tgt_vocab.stoi[inputters.PAD_WORD]
 
-    def _make_shard_state(self, batch, output, range_, noutputs, attns=None):
+    def _make_shard_state(self, batch, output, range_, attns=None):
         """
         Make shard state dictionary for shards() to return iterable
         shards for efficient loss computation. Subclass must define
@@ -76,7 +76,7 @@ class LossComputeBase(nn.Module):
         """
         return NotImplementedError
 
-    def _compute_loss(self, batch, output, target, noutputs, **kwargs):
+    def _compute_loss(self, batch, output, target, **kwargs):
         """
         Compute the loss. Subclass must define this method.
 
@@ -89,7 +89,7 @@ class LossComputeBase(nn.Module):
         """
         return NotImplementedError
 
-    def monolithic_compute_loss(self, batch, output, attns, noutputs):
+    def monolithic_compute_loss(self, batch, output, attns):
         """
         Compute the forward loss for the batch.
 
@@ -104,14 +104,14 @@ class LossComputeBase(nn.Module):
             :obj:`onmt.utils.Statistics`: loss statistics
         """
         range_ = (0, batch.tgt.size(0))
-        shard_state = self._make_shard_state(batch, output, range_, noutputs, attns)
+        shard_state = self._make_shard_state(batch, output, range_, attns)
         _, batch_stats = self._compute_loss(batch, **shard_state)
 
         return batch_stats
 
     def sharded_compute_loss(self, batch, output, attns,
                              cur_trunc, trunc_size, shard_size,
-                             normalization, noutputs):
+                             normalization):
         """Compute the forward loss and backpropagate.  Computation is done
         with shards and optionally truncation for memory efficiency.
 
@@ -141,9 +141,7 @@ class LossComputeBase(nn.Module):
         """
         batch_stats = onmt.utils.Statistics()
         range_ = (cur_trunc, cur_trunc + trunc_size)
-        shard_state = self._make_shard_state(batch, output, range_, noutputs, attns)
-        #shard_state = self._make_shard_state(batch, output, range_, attns)
-
+        shard_state = self._make_shard_state(batch, output, range_, attns)
         for shard in shards(shard_state, shard_size):
             loss, stats = self._compute_loss(batch, **shard)
             loss.div(float(normalization)).backward()
@@ -207,14 +205,13 @@ class NMTLossCompute(LossComputeBase):
 
         self.confidence = 1.0 - label_smoothing
 
-    def _make_shard_state(self, batch, output, range_, noutputs, attns=None):
+    def _make_shard_state(self, batch, output, range_, attns=None):
         return {
             "output": output,
-            "noutputs": noutputs,
             "target": batch.tgt[range_[0] + 1: range_[1]],
         }
 
-    def _compute_loss(self, batch, output, target, noutputs):
+    def _compute_loss(self, batch, output, target):
         #scores = self.generator(self._bottle(output))
         #print (output.size())
         t2 = self.generator(output)
@@ -231,11 +228,8 @@ class NMTLossCompute(LossComputeBase):
                 tmp_.index_fill_(0, mask, 0)
             gtruth = tmp_
         #loss = self.criterion(scores, gtruth)
-
-        loss = self.criterion(scores, gtruth, noutputs)
-        #loss = self.criterion(scores, gtruth, t2)
+        loss = self.criterion(scores, gtruth, t2)
         if self.confidence < 1:
-
             # Default: report smoothed ppl.
             # loss_data = -log_likelihood.sum(0)
             loss_data = loss.data.clone()
@@ -285,12 +279,6 @@ def shards(state, shard_size, eval_only=False):
         # non_none: the subdict of the state dictionary where the values
         # are not None.
         non_none = dict(filter_shard_state(state, shard_size))
-        #print (len(non_none))
-
-        '''asdf
-        print (non_none)
-        exit(1)
-        '''
 
         # Now, the iteration:
         # state is a dictionary of sequences of tensor-like but we
@@ -299,14 +287,7 @@ def shards(state, shard_size, eval_only=False):
         # sequence of tensor-like sequences.
         keys, values = zip(*((k, [v_chunk for v_chunk in v_split])
                              for k, (_, v_split) in non_none.items()))
-        #print (keys)
 
-        '''asdf
-        print (keys)
-        print (values)
-        print (len(values))
-        exit(1)
-        '''
         # Now, yield a dictionary for each shard. The keys are always
         # the same. values is a sequence of length #keys where each
         # element is a sequence of length #shards. We want to iterate
@@ -315,23 +296,12 @@ def shards(state, shard_size, eval_only=False):
         # with the keys.
         for shard_tensors in zip(*values):
             yield dict(zip(keys, shard_tensors))
+
         # Assumed backprop'd
         variables = []
         for k, (v, v_split) in non_none.items():
-            #print ('00000000000000000000000000000000000000000000000000000')
-            #print (v, v_split)
-            #print (k)
-            #print (state[k])
-            #print (state[k].requires_grad)
-
-            
             if isinstance(v, torch.Tensor) and state[k].requires_grad:
                 variables.extend(zip(torch.split(state[k], shard_size),
                                      [v_chunk.grad for v_chunk in v_split]))
-        #exit(1)
-
         inputs, grads = zip(*variables)
-        #print (inputs)
-        #print (grads)
-        #exit(1)
         torch.autograd.backward(inputs, grads)

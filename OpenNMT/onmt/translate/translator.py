@@ -380,7 +380,7 @@ class Translator(object):
             inp = inp.unsqueeze(2)
 
             # Run one step.
-            dec_out, dec_states, attn = self.model.decoder(
+            dec_out, dec_states, attn, _ = self.model.decoder(
                 inp, memory_bank, dec_states, memory_lengths=memory_lengths,
                 step=i)
 
@@ -411,7 +411,6 @@ class Translator(object):
                 b.advance(out[:, j],
                           beam_attn.data[:, j, :memory_lengths[j]])
                 dec_states.beam_update(j, b.get_current_origin(), beam_size)
-
         # (4) Extract sentences from beam.
         ret = self._from_beam(beam)
         ret["gold_score"] = [0] * batch_size

@@ -8,8 +8,8 @@ class hybrid(nn.Module):
     def __init__(self, weight, size_average):
         super(hybrid, self).__init__()
         self.cross = nn.CrossEntropyLoss(weight, size_average = size_average, ignore_index = 0)
-        self.k = 30
-        self.alpha = 0.0
+        self.k = 5
+        self.alpha = 0.5
 
     def duploss(self, predicted):
         summ=0
