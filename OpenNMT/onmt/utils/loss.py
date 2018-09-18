@@ -13,7 +13,7 @@ import onmt.inputters as inputters
 
 from . import myloss
 from . import maxloss
-
+from torch.nn import functional as F
 
 def build_loss_compute(model, tgt_vocab, opt, train=True):
     """
@@ -29,7 +29,7 @@ def build_loss_compute(model, tgt_vocab, opt, train=True):
             opt.copy_loss_by_seqlength)
     else:
         compute = NMTLossCompute(
-            model.generator, tgt_vocab,
+            model.generator, tgt_vocab, #model.history_generator, #model.history_vec, model.history_generator, model.history_rate, model.generate_rate,
             label_smoothing=opt.label_smoothing if train else 0.0)
     compute.to(device)
 
@@ -62,7 +62,7 @@ class LossComputeBase(nn.Module):
         self.tgt_vocab = tgt_vocab
         self.padding_idx = tgt_vocab.stoi[inputters.PAD_WORD]
 
-    def _make_shard_state(self, batch, output, range_, noutputs, attns=None):
+    def _make_shard_state(self, batch, output, range_, attns=None):
         """
         Make shard state dictionary for shards() to return iterable
         shards for efficient loss computation. Subclass must define
@@ -76,7 +76,7 @@ class LossComputeBase(nn.Module):
         """
         return NotImplementedError
 
-    def _compute_loss(self, batch, output, target, noutputs, **kwargs):
+    def _compute_loss(self, batch, output, target, **kwargs):
         """
         Compute the loss. Subclass must define this method.
 
@@ -89,7 +89,7 @@ class LossComputeBase(nn.Module):
         """
         return NotImplementedError
 
-    def monolithic_compute_loss(self, batch, output, attns, noutputs):
+    def monolithic_compute_loss(self, batch, output, attns, non_tf):
         """
         Compute the forward loss for the batch.
 
@@ -104,14 +104,14 @@ class LossComputeBase(nn.Module):
             :obj:`onmt.utils.Statistics`: loss statistics
         """
         range_ = (0, batch.tgt.size(0))
-        shard_state = self._make_shard_state(batch, output, range_, noutputs, attns)
+        shard_state = self._make_shard_state(batch, output, range_, attns)
         _, batch_stats = self._compute_loss(batch, **shard_state)
 
         return batch_stats
 
     def sharded_compute_loss(self, batch, output, attns,
                              cur_trunc, trunc_size, shard_size,
-                             normalization, noutputs):
+                             normalization,non_tf):
         """Compute the forward loss and backpropagate.  Computation is done
         with shards and optionally truncation for memory efficiency.
 
@@ -141,7 +141,7 @@ class LossComputeBase(nn.Module):
         """
         batch_stats = onmt.utils.Statistics()
         range_ = (cur_trunc, cur_trunc + trunc_size)
-        shard_state = self._make_shard_state(batch, output, range_, noutputs, attns)
+        shard_state = self._make_shard_state(batch, output, range_, attns)
         #shard_state = self._make_shard_state(batch, output, range_, attns)
 
         for shard in shards(shard_state, shard_size):
@@ -151,7 +151,7 @@ class LossComputeBase(nn.Module):
 
         return batch_stats
 
-    def _stats(self, loss, scores, target):
+    def _stats(self, loss, scores, target, dup):
         """
         Args:
             loss (:obj:`FloatTensor`): the loss computed by the loss criterion.
@@ -168,7 +168,7 @@ class LossComputeBase(nn.Module):
                           .sum() \
                           .item()
         num_non_padding = non_padding.sum().item()
-        return onmt.utils.Statistics(loss.item(), num_non_padding, num_correct)
+        return onmt.utils.Statistics(loss.item(), num_non_padding, num_correct, dup)
 
     def _bottle(self, _v):
         return _v.view(-1, _v.size(2))
@@ -185,6 +185,11 @@ class NMTLossCompute(LossComputeBase):
     def __init__(self, generator, tgt_vocab, normalization="sents",
                  label_smoothing=0.0):
         super(NMTLossCompute, self).__init__(generator, tgt_vocab)
+        #self.history_generator = history_generator
+        #self.history_vec = history_vec
+        #self.history_rate = history_rate
+        #self.genereate_rate = generate_rate
+
         assert 0.0 <= label_smoothing <= 1.0
         if label_smoothing > 0:
             # When label smoothing is turned on,
@@ -207,19 +212,46 @@ class NMTLossCompute(LossComputeBase):
 
         self.confidence = 1.0 - label_smoothing
 
-    def _make_shard_state(self, batch, output, range_, noutputs, attns=None):
+    def _make_shard_state(self, batch, output, range_, attns=None):
         return {
             "output": output,
-            "noutputs": noutputs,
+            #"noutputs": noutputs,
             "target": batch.tgt[range_[0] + 1: range_[1]],
         }
 
-    def _compute_loss(self, batch, output, target, noutputs):
+    def _compute_loss(self, batch, output, target):#, noutputs):
         #scores = self.generator(self._bottle(output))
         #print (output.size())
         t2 = self.generator(output)
+        #!outputscores = torch.zeros(t2.size())
+
+        #totals = torch.zeros(t2.size(1), t2.size(2)).cuda()
+        #gens = F.softmax(t2)
+        #history_gen = torch.zeros(t2.size()).cuda()
+
+        #print (totals.size())
+        #!hv = self.history_vec(totals)
+        #!history_gen[0] = self.history_generator(hv)
+        #history_gen[0] = self.history_generator(totals)
+
+        #!alphas = F.sigmoid( self.history_rate(hv) + self.generate_rate(output[0]))
+        #!outputscores[0] = alphas * history_gen[0] + (1-alphas) * t2[0]
+
+        #for i in range(1, t2.size(0)):
+        #    totals = totals + gens[i-1]
+        #    #!hv = self.history_vec(totals)
+            
+        #    #!alphas = F.sigmoid( self.history_rate(hv) + self.generate_rate(output[i]))
+        #    #!outputscores[i] = alphas * history_gen[i] + (1-alphas) * t2[i]
+
+        #    #history_gen[i] = self.history_generator(totals)
+
+        
+        #t2 = t2 + history_gen
+        #!scores = self._bottle(outputsocres)
         scores = self._bottle(t2)
 
+    
         gtruth = target.view(-1)
         if self.confidence < 1:
             tdata = gtruth.data
@@ -232,17 +264,31 @@ class NMTLossCompute(LossComputeBase):
             gtruth = tmp_
         #loss = self.criterion(scores, gtruth)
 
-        loss = self.criterion(scores, gtruth, noutputs)
-        #loss = self.criterion(scores, gtruth, t2)
+        #loss = self.criterion(scores, gtruth, noutputs)
+
+        #일반 repeat loss
+        loss, cross_loss, dup_loss = self.criterion(scores, gtruth, t2 )
+
+        #history module 추가한 loss
+
+        #print (history_gen.size())
+        #print (scores.size())
+        #exit(1)
+
+        #loss, cross_loss = self.criterion(scores, gtruth, history_gen, tf)
+
+
         if self.confidence < 1:
 
             # Default: report smoothed ppl.
             # loss_data = -log_likelihood.sum(0)
-            loss_data = loss.data.clone()
+            #loss_data = loss.data.clone()
+            loss_data = cross_loss.clone()
         else:
-            loss_data = loss.data.clone()
+            #loss_data = loss.data.clone()
+            loss_data = cross_loss.clone()
 
-        stats = self._stats(loss_data, scores.data, target.view(-1).data)
+        stats = self._stats(loss_data, scores.data, target.view(-1).data, dup_loss)
 
         return loss, stats
 

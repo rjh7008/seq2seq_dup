@@ -200,6 +200,18 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None):
             nn.Linear(model_opt.rnn_size, len(fields["tgt"].vocab)))
         if model_opt.share_decoder_embeddings:
             generator[0].weight = decoder.embeddings.word_lut.weight
+
+        #!history_vec = nn.Sequential(nn.Linear(len(fields['tgt'].vocab), model_opt.rnn_size)
+        #!    )
+        #history_generator = nn.Sequential(
+        #    nn.Linear(len(fields['tgt'].vocab), model_opt.rnn_size),
+        #    nn.Linear(model_opt.rnn_size, len(fields["tgt"].vocab))
+        #    )
+        
+        #!history_rate = nn.Linear(len(fields['tgt'].vocab), 1)
+        #!generate_rate = nn.Linear(len(fields['tgt'].vocab),1)
+
+
     else:
         generator = CopyGenerator(model_opt.rnn_size,
                                   fields["tgt"].vocab)
@@ -231,8 +243,18 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None):
 
     # Add generator to model (this registers it as parameter of model).
     model.generator = generator
-    model.decoder.generator = generator
+    #model.history_generator = history_generator
+    #model.history_vec = history_vec
+    #model.history_rate = history_rate
+    #model.generate_rate = generate_rate
 
+    model.decoder.generator = generator
+    #model.decoder.history_generator = history_generator
+    #model.decoder.history_vec = history_vec
+    #model.decoder.history_rate = history_rate
+    #model.decoder.generate_rate = generate_rate
+    
+        
     model.to(device)
 
     return model

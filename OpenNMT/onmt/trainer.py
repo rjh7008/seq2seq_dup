@@ -145,6 +145,12 @@ class Trainer(object):
             # 4. Drop a checkpoint if needed.
             self.maybe_drop_checkpoint(epoch, valid_stats)
 
+            if self.train_loss.criterion.alpha < 0.4:
+                print('loss alpha updated ',self.train_loss.criterion.alpha,' -> ', end= ' ')
+                #self.train_loss.criterion.alpha += 0.1
+                print(self.train_loss.criterion.alpha)
+
+
     def train_epoch(self, train_iter, epoch):
         """ Train next epoch.
         Args:
@@ -231,11 +237,11 @@ class Trainer(object):
             tgt = inputters.make_features(batch, 'tgt')
 
             # F-prop through the model.
-            outputs, attns, _, noutputs = self.model(src, tgt, src_lengths)
+            outputs, attns, _, non_tf = self.model(src, tgt, src_lengths)
 
             # Compute loss.
             batch_stats = self.valid_loss.monolithic_compute_loss(
-                batch, outputs, attns, noutputs)
+                batch, outputs, attns, non_tf)
 
             # Update statistics.
             stats.update(batch_stats)
@@ -317,12 +323,12 @@ class Trainer(object):
                 if self.grad_accum_count == 1:
                     self.model.zero_grad()
 
-                outputs, attns, dec_state, noutputs = \
+                outputs, attns, dec_state, non_tf = \
                     self.model(src, tgt, src_lengths, dec_state)
                 # 3. Compute loss in shards for memory efficiency.
                 batch_stats = self.train_loss.sharded_compute_loss(
                     batch, outputs, attns, j,
-                    trunc_size, self.shard_size, normalization, noutputs)
+                    trunc_size, self.shard_size, normalization,non_tf)#, noutputs)
 
                 # 4. Update the parameters and statistics.
                 if self.grad_accum_count == 1:

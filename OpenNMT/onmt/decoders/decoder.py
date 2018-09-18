@@ -156,13 +156,13 @@ class RNNDecoderBase(nn.Module):
                 if type(attns[k]) == list:
                     attns[k] = torch.stack(attns[k])
 
-        if type(non_tfoutput) == list:
-            non_tfoutput = torch.stack(non_tfoutput)
-            '''
-            for k in attns:
-                if type(attns[k]) == list:
-                    attns[k] = torch.stack(attns[k])
-            '''
+        #if type(non_tfoutput) == list:
+        #    non_tfoutput = torch.stack(non_tfoutput)
+        #    '''
+        #    for k in attns:
+        #        if type(attns[k]) == list:
+        #            attns[k] = torch.stack(attns[k])
+        #    '''
 
         return decoder_outputs, state, attns, non_tfoutput
 
@@ -308,8 +308,9 @@ class InputFeedRNNDecoder(RNNDecoderBase):
         """
         # Additional args check.
 
-        #tf_ratio = 0.5
-        #tf = True if random.random() < tf_ratio else False
+        tf_ratio = 0.80
+        tf_ratio = -10
+        tf = True if random.random() < tf_ratio else False
         #print (tgt.size())
 
         input_feed = state.input_feed.squeeze(0)
@@ -333,6 +334,7 @@ class InputFeedRNNDecoder(RNNDecoderBase):
             attns["coverage"] = []
         
         emb = self.embeddings(tgt)
+
         nemb = self.embeddings(tgt)
         nemb_t = nemb[0]
 
@@ -346,10 +348,11 @@ class InputFeedRNNDecoder(RNNDecoderBase):
 
         # Input feed concatenates hidden state with
         # input at every time step.
+        totals = None
         for _, emb_t in enumerate(emb.split(1)):
             emb_t = emb_t.squeeze(0)
             
-            if _ > 0:
+            if not tf and _ > 0:
                 last = last.unsqueeze(1).unsqueeze(0)
                 nemb_t = self.embeddings(last)
                 nemb_t = nemb_t.squeeze(0)
@@ -387,13 +390,14 @@ class InputFeedRNNDecoder(RNNDecoderBase):
             ninput_feed = ndecoder_output
 
             decoder_outputs += [decoder_output]
-            #ndecoder_outputs += [decoder_output]
+            ndecoder_outputs += [decoder_output]
 
             attns["std"] += [p_attn]
 
+
             gens = self.generator(ndecoder_output)
             lastv, last = gens.max(dim=-1)
-            ndecoder_outputs += [gens]
+            #ndecoder_outputs += [gens]
             
 
 
@@ -411,6 +415,22 @@ class InputFeedRNNDecoder(RNNDecoderBase):
             elif self._copy:
                 attns["copy"] = attns["std"]
         # Return result.
+        '''
+        print (len(decoder_outputs))
+        for zz in decoder_outputs:
+            print (zz.size())
+        print()
+        print (len(ndecoder_outputs))
+        print()
+        for zz in ndecoder_outputs:
+            print (zz.size())
+            #exit(1)
+        '''
+        #print(decoder_outputs.size())
+        #print(ndecoder_outputs.size())
+
+
+
         return hidden, decoder_outputs, attns, ndecoder_outputs
 
     def _build_rnn(self, rnn_type, input_size,

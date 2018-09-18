@@ -105,6 +105,95 @@ class CopyGenerator(nn.Module):
         return torch.cat([out_prob, copy_prob], 1)
 
 
+class hybrid(object):
+    def __init__(self,vocab_size, force_copy, pad, eps = 1e-20):
+        self.default = CopyGeneratorCriterion(vocab_size, force_copy, pad, eps)
+        self.k = 30
+        self.alpha = 0.7
+        print('k:',self.k)
+        print('alpha:',self.alpha)
+
+    def dup(self, predicted):
+        summ=0
+        s2=0
+        #start = idx * predicted
+        #end = idx * predicted + shard_size
+        soft = predicted
+        #soft = F.softmax(predicted, dim=-1)
+        #soft = predicted
+        _, predidx = torch.max(soft, dim=2)
+
+        for i_seq in range(1, predicted.size(0)):
+            if i_seq > self.k:
+                cal_start = i_seq - self.k
+            else:
+                cal_start = 0
+
+            '''
+            indices = predidx[cal_start:i_seq].transpose(1,0)
+            tmp = torch.gather(soft[i_seq], 1, indices)
+            for i_batch in range(predicted.size(1)):
+                if predidx[i_seq,i_batch].item() == 0:
+                    continue
+                t = torch.unique(tmp[i_batch].cpu()).cuda()
+                print (t)
+                summ += t.sum()
+            '''
+            #exit(1)
+            #summ += tmp.sum()
+            #print (soft[i_seq].size(), indices.size())
+
+            indices = predidx[cal_start:i_seq].transpose(1,0)
+            t = torch.gather(soft[i_seq], 1, indices).sum()
+
+            summ += t
+
+            #norm k
+            #if i_seq> self.k:
+            #    summ += (t / (self.k))
+            #else:
+            #    summ += (t / (i_seq))
+
+            '''unique 필요할때
+            t=0
+            for i_batch in range(predicted.size(1)):
+                if predidx[i_seq,i_batch].item() == 0:
+                    continue
+                indices = predidx[cal_start:i_seq,i_batch]
+                indices = torch.unique(indices.cpu()).cuda()
+                t += torch.gather(soft[i_seq,i_batch],0,indices).sum()
+                summ += t
+            if i_seq>self.k:
+                summ+=(t/(self.k))
+            else:
+                summ += (t/(i_seq))
+
+            '''
+
+            #print(summ, s2)
+            #exit(1)
+
+            #for i_batch in range(predicted.size(1)): # batch_size
+            #    indices = predidx[cal_start:i_seq, i_batch]
+            #    tsumm += predicted[i_seq, i_batch, indices].sum()
+            #print(summ)
+            #print (tsumm)
+            #exit(1)
+
+        return summ
+
+    def __call__(self, scores, align, target, pred):
+        totalloss = 0
+        
+        c = self.default(scores,align,target).sum()
+        totalloss = c
+
+        if self.alpha > 0:
+            local = self.dup(pred)
+            totalloss += local
+        return totalloss, c
+
+
 class CopyGeneratorCriterion(object):
     """ Copy generator criterion """
 
@@ -159,8 +248,10 @@ class CopyGeneratorLossCompute(loss.LossComputeBase):
         self.cur_dataset = None
         self.force_copy = force_copy
         self.normalize_by_length = normalize_by_length
-        self.criterion = CopyGeneratorCriterion(len(tgt_vocab), force_copy,
-                                                self.padding_idx)
+        self.criterion = hybrid(len(tgt_vocab), force_copy,
+                                self.padding_idx)
+        #self.criterion = CopyGeneratorCriterion(len(tgt_vocab), force_copy,
+        #                                        self.padding_idx)
 
     def _make_shard_state(self, batch, output, range_, attns):
         """ See base class for args description. """
@@ -190,7 +281,13 @@ class CopyGeneratorLossCompute(loss.LossComputeBase):
         scores = self.generator(self._bottle(output),
                                 self._bottle(copy_attn),
                                 batch.src_map)
-        loss = self.criterion(scores, align, target)
+        #print (scores.size(), align.size(), target.size())
+        loss, stat_loss = self.criterion(scores, align, target, self._unbottle(scores, batch.batch_size))
+
+        #original
+        #loss = self.criterion(scores, align, target)
+        #print (loss)
+        #exit(1)
         scores_data = scores.data.clone()
         scores_data = inputters.TextDataset.collapse_copy_scores(
             self._unbottle(scores_data, batch.batch_size),
@@ -207,7 +304,10 @@ class CopyGeneratorLossCompute(loss.LossComputeBase):
 
         # Compute sum of perplexities for stats
         loss_data = loss.sum().data.clone()
-        stats = self._stats(loss_data, scores_data, target_data)
+
+        #original
+        #stats = self._stats(loss_data, scores_data, target_data)
+        stats = self._stats(stat_loss.data.clone(), scores_data, target_data)
 
         if self.normalize_by_length:
             # Compute Loss as NLL divided by seq length
@@ -220,5 +320,4 @@ class CopyGeneratorLossCompute(loss.LossComputeBase):
             loss = torch.div(loss, tgt_lens).sum()
         else:
             loss = loss.sum()
-
         return loss, stats

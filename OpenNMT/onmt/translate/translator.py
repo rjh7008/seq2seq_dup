@@ -15,6 +15,8 @@ import onmt.translate.beam
 import onmt.inputters as inputters
 import onmt.opts as opts
 
+from torch.nn import functional as F
+
 
 def build_translator(opt, report_score=True, logger=None, out_file=None):
     if out_file is None:
@@ -168,7 +170,7 @@ class Translator(object):
                 of `n_best` predictions
         """
         assert src_data_iter is not None or src_path is not None
-
+        #print ('batch', batch_size)
         if batch_size is None:
             raise ValueError("batch_size must be set")
         data = inputters.build_dataset(self.fields,
@@ -205,7 +207,8 @@ class Translator(object):
 
         all_scores = []
         all_predictions = []
-
+        if attn_debug:
+            fff = open('default_attn.txt','w')
         for batch in data_iter:
             batch_data = self.translate_batch(batch, data)
             translations = builder.from_batch(batch_data)
@@ -237,19 +240,42 @@ class Translator(object):
                     srcs = trans.src_raw
                     preds = trans.pred_sents[0]
                     preds.append('</s>')
+
                     attns = trans.attns[0].tolist()
                     header_format = "{:>10.10} " + "{:>10.7} " * len(srcs)
                     row_format = "{:>10.10} " + "{:>10.7f} " * len(srcs)
+
                     output = header_format.format("", *trans.src_raw) + '\n'
+                    
                     for word, row in zip(preds, attns):
                         max_index = row.index(max(row))
+                        output += srcs[max_index] + ' '
                         row_format = row_format.replace(
                             "{:>10.7f} ", "{:*>10.7f} ", max_index + 1)
                         row_format = row_format.replace(
                             "{:*>10.7f} ", "{:>10.7f} ", max_index)
                         output += row_format.format(word, *row) + '\n'
                         row_format = "{:>10.10} " + "{:>10.7f} " * len(srcs)
-                    os.write(1, output.encode('utf-8'))
+                    #os.write(1, output.encode('utf-8'))
+                    fff.write(output)
+
+                    from operator import add;
+                    totals = attns[0]
+                    for r in attns[1:]:
+                        #totals = map(add,totals,r)
+                        totals = [a + b for a, b in zip(totals, r)]
+                    fff.write('totals\n')
+
+                    for w,r in zip(srcs, totals):
+                        fff.write(w +' ')
+                    fff.write('\n')
+
+                    for r in totals:
+                        fff.write(str(round(r,4)) + ' ')
+                    fff.write('\n\n')
+                    #fff.write('totals\n'+str(totals) + '\n\n')
+
+
 
         if self.report_score:
             msg = self._report_score('PRED', pred_score_total,
@@ -359,6 +385,11 @@ class Translator(object):
         memory_lengths = src_lengths.repeat(beam_size)
         dec_states.repeat_beam_size_times(beam_size)
 
+
+        ################
+        hist_vec = torch.zeros(self.beam_size, len(self.fields['tgt'].vocab)).cuda()
+        ################
+
         # (3) run the decoder to generate sentences, using beam search.
         for i in range(self.max_length):
             if all((b.done() for b in beam)):
@@ -379,25 +410,51 @@ class Translator(object):
             # in the decoder
             inp = inp.unsqueeze(2)
 
+            #print (inp.size())
+            #print (memory_bank.size())
+
             # Run one step.
-            dec_out, dec_states, attn, _ = self.model.decoder(
+            dec_out, dec_states, attn = self.model.decoder(
                 inp, memory_bank, dec_states, memory_lengths=memory_lengths,
                 step=i)
 
             dec_out = dec_out.squeeze(0)
-
+            
+            #print ('dec_out',dec_out.size())
+            
+            
+            
             # dec_out: beam x rnn_size
 
             # (b) Compute a vector of batch x beam word scores.
             if not self.copy_attn:
-                out = self.model.generator.forward(dec_out).data
+                out = self.model.generator.forward(dec_out)
+                #out = F.softmax(out, dim = -1)
+                out = F.log_softmax(out,dim=-1)
+
+                ####
+                #hist_out = F.log_softmax(self.model.history_generator.forward(hist_vec), dim=-1)
+                #print (dec_out.size())
+                #print (out.size())
+                #print (hist_out.size())
+                #hist_vec = hist_vec + out
+
+                #out = out + hist_out
+                ####
+
+
+                out = out.data
                 out = unbottle(out)
+
+                #print ('out',out.size())
+                #exit(1)
                 # beam x tgt_vocab
                 beam_attn = unbottle(attn["std"])
             else:
                 out = self.model.generator.forward(dec_out,
                                                    attn["copy"].squeeze(0),
                                                    src_map)
+
                 # beam x (tgt_vocab + extra_vocab)
                 out = data.collapse_copy_scores(
                     unbottle(out.data),

@@ -15,18 +15,25 @@ class Statistics(object):
     * elapsed time
     """
 
-    def __init__(self, loss=0, n_words=0, n_correct=0):
+    def __init__(self, loss=0, n_words=0, n_correct=0, p_dup = 0):
         self.loss = loss
         self.n_words = n_words
         self.n_correct = n_correct
         self.n_src_words = 0
         self.start_time = time.time()
 
+        self.n_batch = 0
+        self.p_dup = p_dup
+
     def update(self, stat):
         """ update statistics """
         self.loss += stat.loss
         self.n_words += stat.n_words
         self.n_correct += stat.n_correct
+
+        
+        self.n_batch += 1
+        self.p_dup += stat.p_dup
 
     def accuracy(self):
         """ compute accuracy """
